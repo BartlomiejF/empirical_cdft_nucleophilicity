@@ -130,6 +130,7 @@ output_data = {solv: pd.read_csv(path, index_col=False,
                                     "sasa"]) for solv, path in zip(solvents, outpaths_xtb)}
 
 for k, v in input_data.items():    
+    v = v.sort_values('N Params', ascending=False).drop_duplicates(subset='Smiles', keep='first') 
     # Calculate Q1, Q3, and IQR
     Q1 = v["N Params"].quantile(0.25)
     Q3 = v["N Params"].quantile(0.75)
@@ -171,40 +172,103 @@ data["solv"] = data["Solvent"].replace({"water": 78.4,
                                         "DMSO": 46.7,
                                         })
 
+data["sol"] = data["Solvent"].replace({"water": "water",
+                                        "ch2cl2": "DCM",
+                                        "DMF": "DMF",
+                                        "THF": "THF",
+                                        "acetonitrile": "ACN",
+                                        "DMSO": "DMSO",
+                                        })
 
-data["pysr_acyclic"] = np.log((-data["omega"]+data["solv"]+(-1.62*data["dipole_solv"]**2+1.62*data["omega_solv"])**2*(data["homo"]-data["homo_1_solv"]-0.889)**2)**2)
-data["pysr_c1ccccc1"] = data["dipole_solv"] - data["gam"] + (data["dipole_solv"]**2 * data["nei_1_fuk"]**2 +0.248*(-2.25*data["chrg"]+data["homo"]))**3 + 22.7
-data["pysr_c1ccncc1"] = -np.log((-4.18*10**3*data["nei_1_fuk"]**2+np.exp(8.38*data["fuk_plus"]))**2) - 28.5 - 473/data["homo"]
-data["pysr_c1ccc2[nH]ccc2c1"] = -data["fuk_plus"]*(data["sasa"]+2.93/(data["mu"]+data["sasa"]+1.04))-0.252*data["homo_1"]*data["mu"]+31.1
-data["pysr_C1CCNC1"] = np.log(np.sqrt((0.0152*data["gam"]*(6.26-data["sasa"])+data["nei_3_chrg"])**2))+18.2-1/(data["mu"]+data["sasa"])
-data["pysr_c1ccc(P(c2ccccc2)c2ccccc2)cc1"] = -9.97*data["gam"]*data["nei_1_chrg"]+1/(data["chrg"]-0.893+3.04/data["eta"])+293/data["omega"]
+
+# old equations
+# data["pysr_acyclic"] = np.log((-data["omega"]+data["solv"]+(-1.62*data["dipole_solv"]**2+1.62*data["omega_solv"])**2*(data["homo"]-data["homo_1_solv"]-0.889)**2)**2)
+# data["pysr_c1ccccc1"] = data["dipole_solv"] - data["gam"] + (data["dipole_solv"]**2 * data["nei_1_fuk"]**2 +0.248*(-2.25*data["chrg"]+data["homo"]))**3 + 22.7
+# data["pysr_c1ccncc1"] = -np.log((-4.18*10**3*data["nei_1_fuk"]**2+np.exp(8.38*data["fuk_plus"]))**2) - 28.5 - 473/data["homo"]
+# data["pysr_c1ccc2[nH]ccc2c1"] = -data["fuk_plus"]*(data["sasa"]+2.93/(data["mu"]+data["sasa"]+1.04))-0.252*data["homo_1"]*data["mu"]+31.1
+# data["pysr_C1CCNC1"] = np.log(np.sqrt((0.0152*data["gam"]*(6.26-data["sasa"])+data["nei_3_chrg"])**2))+18.2-1/(data["mu"]+data["sasa"])
+# data["pysr_c1ccc(P(c2ccccc2)c2ccccc2)cc1"] = -9.97*data["gam"]*data["nei_1_chrg"]+1/(data["chrg"]-0.893+3.04/data["eta"])+293/data["omega"]
+
+# after revision
+data["pysr_acyclic"] = data["homo"] + np.sqrt(data["dipole_solv"] * (data["mu"] * data["nei_3_fuk"] * data["omega_solv"]**2 + data["solv"] + 111.) - 1 / (0.138 * data["omega"] - 0.807))
+data["pysr_c1ccccc1"] = -data["gam"] + (-data["homo"] - 2.53 - 1.61 / (data["dipole_solv"] + data["nei_1_chrg"] - 1.71)) * (2 * data["fuk_minus"] + data["homo"] + 12.4)
+data["pysr_c1ccncc1"] = np.sqrt((7.49 * data["homo_1"] + 87.8)**2) + 10.0
+data["pysr_c1ccc2[nH]ccc2c1"] = 33.2 + (data["homo_1"] + data["mu"])**2 * (-0.0684)
+data["pysr_C1CCNC1"] = -np.sqrt(data["nei_3_chrg"]) + 18.7 - 1 / (data["homo"] + 11.6)
+data["pysr_c1ccc(P(c2ccccc2)c2ccccc2)cc1"] = 3.98 * data["gam"] + 3.98 * np.sqrt((data["omega"] - 12.8)**2)
 
 
 fig, ax = plt.subplots(3,2, figsize=(25,25))
 for axx, gr in zip(itertools.chain.from_iterable(ax), data["group_murcko"].value_counts().head(6).index):
     plotdata = data[data["group_murcko"]==gr]
     minmax = [plotdata[f"pysr_{gr}"].min(),plotdata[f"pysr_{gr}"].max()]
-    sns.scatterplot(plotdata, x=f"pysr_{gr}", y="N Params", ax=axx, hue="Solvent")
-    axx.set(xlabel=f"$N_{{emp}}<{gr}>$", ylabel="$N_M$")
+
+    mol = Chem.MolFromSmiles(gr)
+    if mol:
+        img = Draw.MolToImage(mol, kekulize=True)
+        # make white background transparent
+        img = img.convert("RGBA")
+        data_img = img.getdata()
+        new_data = [(255, 255, 255, 0) if item[:3] == (255, 255, 255) else item for item in data_img]
+        img.putdata(new_data)
+        ins = inset_axes(axx, width="20%", height="20%", loc="lower right")
+        ins.imshow(img)
+        ins.axis("off")
+    else:
+        axx.text(0.8, 0.1, f"{gr}", transform=axx.transAxes)
+
+    sns.scatterplot(plotdata, x=f"pysr_{gr}", y="N Params", ax=axx, hue="sol")
+    axx.set(xlabel=f"$N_{{emp}}<{gr}> (n={len(plotdata)})$", ylabel="$N_M$")
     linr = linregress(plotdata[f"pysr_{gr}"], plotdata["N Params"])
-    r2 = r2_score(plotdata["N Params"], plotdata[f"pysr_{gr}"])
-    rmse = np.sqrt(mean_squared_error(plotdata["N Params"], plotdata[f"pysr_{gr}"]))
+    r2 = r2_score(plotdata["N Params"], plotdata[f"pysr_{gr}"]*linr.slope + linr.intercept)
+    rmse = np.sqrt(mean_squared_error(plotdata["N Params"], plotdata[f"pysr_{gr}"]*linr.slope + linr.intercept))
     axx.text(0.3,0.87, f"$R^2$={r2:.3f}\nRMSE={rmse:.3f}", transform=axx.transAxes)
     axx.plot(minmax, [x*linr.slope + linr.intercept for x  in minmax], ls=":", linewidth=3, alpha=0.7, c="k")
     axx.legend(loc="upper left")
 
-    mol = Chem.MolFromSmiles(gr)
-    if mol:
-        ins = inset_axes(axx, width="20%", height="20%", loc="lower right")
-        ins.imshow(Draw.MolToImage(mol))
-        ins.axis("off")
-    else:
-        axx.text(0.8,0.1, f"{gr}", transform=axx.transAxes)
-
-pldat = data[(data["group_murcko"] == "C1CCNC1") & ~(data["Solvent"] == "ch2cl2")]
-minmax = [pldat[f"pysr_C1CCNC1"].min(),pldat[f"pysr_C1CCNC1"].max()]
-r2 = r2_score(pldat["N Params"], pldat[f"pysr_C1CCNC1"])
-rmse = np.sqrt(mean_squared_error(pldat["N Params"], pldat[f"pysr_C1CCNC1"]))
-ax[2][0].text(0.7,0.4, f"$R^2$={r2:.3f}\nRMSE={rmse:.3f}", color="r", transform=ax[2][0].transAxes)
+# pldat = data[(data["group_murcko"] == "C1CCNC1") & ~(data["Solvent"] == "ch2cl2")]
+# minmax = [pldat[f"pysr_C1CCNC1"].min(),pldat[f"pysr_C1CCNC1"].max()]
+# r2 = r2_score(pldat["N Params"], pldat[f"pysr_C1CCNC1"]*linr.slope + linr.intercept)
+# rmse = np.sqrt(mean_squared_error(pldat["N Params"], pldat[f"pysr_C1CCNC1"]*linr.slope + linr.intercept))
+# ax[2][0].text(0.7,0.4, f"$R^2$={r2:.3f}\nRMSE={rmse:.3f}", color="r", transform=ax[2][0].transAxes)
 fig.tight_layout()
 fig.savefig("imgs/xtb_per_scaffold.pdf")
+
+def get_pysr_prediction(row):
+    scaffold = row["group_murcko"]
+    
+    # old
+    # if scaffold == "acyclic":
+    #     return np.log((-row["omega"] + row["solv"] + (-1.62*row["dipole_solv"]**2 + 1.62*row["omega_solv"])**2 * (row["homo"] - row["homo_1_solv"] - 0.889)**2)**2)
+    # elif scaffold == "c1ccccc1":
+    #     return row["dipole_solv"] - row["gam"] + (row["dipole_solv"]**2 * row["nei_1_fuk"]**2 + 0.248*(-2.25*row["chrg"] + row["homo"]))**3 + 22.7
+    # elif scaffold == "c1ccncc1":
+    #     return -np.log((-4.18e3*row["nei_1_fuk"]**2 + np.exp(8.38*row["fuk_plus"]))**2) - 28.5 - 473/row["homo"]
+    # elif scaffold == "c1ccc2[nH]ccc2c1":
+    #     return -row["fuk_plus"]*(row["sasa"] + 2.93/(row["mu"] + row["sasa"] + 1.04)) - 0.252*row["homo_1"]*row["mu"] + 31.1
+    # elif scaffold == "C1CCNC1":
+    #     return np.log(np.sqrt((0.0152*row["gam"]*(6.26 - row["sasa"]) + row["nei_3_chrg"])**2)) + 18.2 - 1/(row["mu"] + row["sasa"])
+    # elif scaffold == "c1ccc(P(c2ccccc2)c2ccccc2)cc1":
+    #     return -9.97*row["gam"]*row["nei_1_chrg"] + 1/(row["chrg"] - 0.893 + 3.04/row["eta"]) + 293/row["omega"]
+    # else:
+    #     return np.nan
+
+    # revised
+    if scaffold == "acyclic":
+        return row["homo"] + np.sqrt(row["dipole_solv"] * (row["mu"] * row["nei_3_fuk"] * row["omega_solv"]**2 + row["solv"] + 111.) - 1 / (0.138 * row["omega"] - 0.807))
+    elif scaffold == "c1ccccc1":
+        return -row["gam"] + (-row["homo"] - 2.53 - 1.61 / (row["dipole_solv"] + row["nei_1_chrg"] - 1.71)) * (2 * row["fuk_minus"] + row["homo"] + 12.4)
+    elif scaffold == "c1ccncc1":
+        return np.sqrt((7.49 * row["homo_1"] + 87.8)**2) + 10.0
+    elif scaffold == "c1ccc2[nH]ccc2c1":
+        return 33.2 + (row["homo_1"] + row["mu"])**2 * (-0.0684)
+    elif scaffold == "C1CCNC1":
+        return -np.sqrt(row["nei_3_chrg"]) + 18.7 - 1 / (row["homo"] + 11.6)
+    elif scaffold == "c1ccc(P(c2ccccc2)c2ccccc2)cc1":
+        return 3.98 * row["gam"] + 3.98 * np.sqrt((row["omega"] - 12.8)**2)
+    else:
+        return row["dipole_solv"] + (row["chrg"] - row["dipole_solv"] * row["fuk_minus"] + 2.89)**2 * (row["homo"] + row["homo_1_solv"] + row["mu_solv"] + 31.0) + 14.5
+    
+data["pysr_prediction"] = data.apply(get_pysr_prediction, axis=1)
+
+data.to_csv(snakemake.output["csv"])

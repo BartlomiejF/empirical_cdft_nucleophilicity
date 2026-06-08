@@ -16,7 +16,8 @@ output_data = {solv: pd.read_csv(path, index_col=False,
                                     "nei_1_chrg", "nei_2_chrg", "nei_3_chrg",
                                     "sasa"]) for solv, path in zip(solvents, outpaths_xtb)}
 
-for k, v in input_data.items():    
+for k, v in input_data.items():   
+    v = v.sort_values('N Params', ascending=False).drop_duplicates(subset='Smiles', keep='first') 
     # Calculate Q1, Q3, and IQR
     Q1 = v["N Params"].quantile(0.25)
     Q3 = v["N Params"].quantile(0.75)
@@ -71,74 +72,46 @@ y = data["N Params"]
 model = PySRRegressor(
     maxsize=30,
     niterations=1000,
-    
-    # Operators - Enhanced for chemistry
-    binary_operators=["+", "-", "*", "/", "pow"],  # Added pow for power laws
+    binary_operators=["+", "-", "*", "/"],
     unary_operators=[
-        "exp", "log", "sqrt", "square",  # Added square - common in chemistry
+        "exp", "log", "sqrt", "square",
         "inv(x) = 1/x",
-        "cube(x) = x^3",  # Useful for volume/distance relationships
+        "cube(x) = x^3",
     ],
     extra_sympy_mappings={
-        "inv": lambda x: 1/x,
+        "inv":  lambda x: 1/x,
         "cube": lambda x: x**3,
     },
-    
-    # Loss and selection
     elementwise_loss="loss(prediction, target) = (prediction - target)^2",
-    model_selection="best",  # Consider "accuracy" to see Pareto frontier
-    
-    # Population parameters - Optimized
-    populations=20,  # Reduced from 30 - diminishing returns beyond 20
-    population_size=100,  # Reduced from 200 - faster with similar quality
-    
-    # Complexity control - CRITICAL for chemistry
-    parsimony=0.0032,  # Slightly increased for simpler models
+    model_selection="best",
+    populations=20,
+    population_size=100,
+    parsimony=0.0032,
     complexity_of_operators={
-        "/": 2,      # Division can cause instability
-        "pow": 3,    # Power operations are complex
-        "log": 2,    # Logarithms need careful handling
-        "exp": 2,    # Exponentials grow rapidly
-        "cube": 2,   # Moderate complexity
+        "/":    2,
+        "log":  2,
+        "exp":  2,
+        "cube": 2,
     },
-    
-    # Performance upgrades
-    ncycles_per_iteration=550,  # Up from 10 - MUCH better evolution
-    turbo=True,  # Faster evaluation on CPU
-    batching=True,  # Enable if you have >5000 data points
-    batch_size=50,  # Adjust based on your dataset size
-    
-    # Search improvements
-    adaptive_parsimony_scaling=20.0,  # Dynamic complexity penalty
-    warmup_maxsize_by=0.0,  # Start with full complexity immediately
-    
-    # Mutation weights - Fine-tuned for chemistry
+    ncycles_per_iteration=550,
+    turbo=True,
+    batching=True,
+    batch_size=50,
+    adaptive_parsimony_scaling=20.0,
+    warmup_maxsize_by=0.0,
     weight_add_node=0.79,
-    weight_insert_node=5.0,  # Favor insertions - builds structure
+    weight_insert_node=5.0,
     weight_delete_node=1.6,
-    weight_simplify=0.01,  # Algebraic simplification
+    weight_simplify=0.01,
     weight_mutate_constant=0.048,
     weight_mutate_operator=0.47,
     weight_swap_operands=0.1,
-    
-    # Optimization
-    optimizer_algorithm="BFGS",  # Better than default NelderMead for smooth landscapes
-    optimizer_nrestarts=3,  # Multiple restarts for constant optimization
-    
-    # Constraints for physical meaning
-    constraints={
-        "pow": (-1, 5),  # Limit power range to physically reasonable values
-        "/": (9, 9),     # Allow division everywhere (adjust if needed)
-    },
-    
-    # Useful features
+    optimizer_algorithm="BFGS",
+    optimizer_nrestarts=3,
     should_optimize_constants=True,
-    deterministic=True,  # Set False for stochastic search if exploring
-    random_state=99,  # Reproducibility
+    deterministic=True,
+    random_state=42,
     parallelism="serial",
-    
-    # Output control
-    # verbosity=1,  # Set to 0 for less output, 2 for debugging
     progress=True,
     select_k_features=8,
 )

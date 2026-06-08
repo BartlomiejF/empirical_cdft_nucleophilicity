@@ -14,15 +14,11 @@ for solv in solvents:
 
 rule all:
     input:
-        # expand("output/dbs/{solv}.csv", solv=solvents),
-        # expand("output/dbs/mopac_{solv}.csv", solv=solvents),
-        # expand("output/equation/eq_{solv}_mopac.tex", solv=solvents),
         "output/equation/eq_solvents_xtb.tex",
-        # "output/equation/eq_all_mopac.tex",
         "output/equation/eq_all_xtb.tex",
         "output/equation/eq_scaffolds_xtb.tex",
-        # "output/dbs/solvents.csv",
-        # expand("input/solvents/{solv}/{solv}.props", solv=solvents),
+        "output/dbs/solvents.csv",
+        expand("input/solvents/{solv}/{solv}.props", solv=solvents),
         "imgs/ng_xtb.pdf",
         "imgs/nd_xtb.pdf",
         "imgs/xtb_all.pdf",
@@ -30,7 +26,17 @@ rule all:
         "imgs/xtb_per_solvents.pdf",
         "imgs/xtb_per_scaffold.pdf",
         "imgs/ng_mopac.pdf",
-        "imgs/nd_mopac.pdf"
+        "imgs/nd_mopac.pdf",
+        "imgs/xtb_combined.pdf",
+        expand('output/pyscf/{mol}_reactivity.json', mol=get_cids(f"input/dbs/water.csv")[:-2]),
+        "output/pyscf_water/water_reactivity.json",
+        "imgs/ng_dft.pdf",
+        "imgs/nd_dft.pdf",
+        "imgs/pysr_dft.pdf",
+        "imgs/pysr_water_dft.pdf",
+        "imgs/pysr_scaffold_dft.pdf",
+
+
 
 
 # TODO: cleaning rule
@@ -312,7 +318,8 @@ rule visualize_xtb:
         "imgs/nd_xtb.pdf",
         "imgs/xtb_all.pdf",
         "imgs/xtb_all_per_solvents.pdf",
-        "imgs/xtb_per_solvents.pdf"
+        "imgs/xtb_per_solvents.pdf",
+        csv = "output/xtb_indices.csv"
 
     script:
         "scripts/analysis.py"
@@ -325,7 +332,8 @@ rule visualize_mopac:
 
     output:
         "imgs/ng_mopac.pdf",
-        "imgs/nd_mopac.pdf"
+        "imgs/nd_mopac.pdf",
+        csv = "output/mopac_indices.csv"
 
     script:
         "scripts/analysis_mopac.py"
@@ -337,7 +345,129 @@ rule visualize_xtb_scaffold:
         xtb = expand("output/dbs/{solv}.csv", solv=solvents)
 
     output:
-        "imgs/xtb_per_scaffold.pdf"
+        "imgs/xtb_per_scaffold.pdf",
+        csv = "output/xtb_indices_scaffold.csv"
 
     script:
         "scripts/analysis_scaffolds.py"
+
+
+rule visualize_xtb_combined:
+    input:
+        xtb_scaf = "output/xtb_indices_scaffold.csv"
+
+    output:
+        img = "imgs/xtb_combined.pdf",
+
+    script:
+        "scripts/analysis_combined.py"
+
+
+# dft_cids = get_cids(f"input/dbs/water.csv")[:-2:2]
+dft_cids = get_cids(f"input/dbs/water.csv")[:-2]
+
+rule prepare_pyscf_files:
+    input:
+        xyzs = expand('input/mols/water/{cid}/{cid}.xyz', cid=dft_cids),
+        chrgs = expand('input/mols/water/{cid}/.CHRG', cid=dft_cids),
+        uhfs = expand('input/mols/water/{cid}/.UHF', cid=dft_cids),
+
+    output:
+        xyzs = expand('input/pyscf/{cid}.xyz', cid=dft_cids),
+        chrgs = expand('input/pyscf/.{cid}.CHRG', cid=dft_cids),
+        uhfs = expand('input/pyscf/.{cid}.UHF', cid=dft_cids)
+
+    run:
+        import os
+        import shutil
+
+        # Ensure directory exists
+        os.makedirs("input/pyscf", exist_ok=True)
+        os.makedirs("output/pyscf/logs", exist_ok=True)
+
+        # We iterate through the IDs to map input paths to output paths
+        for cid in dft_cids:
+            # Copy XYZ: input/mols/water/1/1.xyz -> input/pyscf/1.xyz
+            shutil.copy(f"input/mols/water/{cid}/{cid}.xyz", f"input/pyscf/{cid}.xyz")
+            
+            # Copy CHRG: input/mols/water/1/.CHRG -> input/pyscf/.1.CHRG
+            shutil.copy(f"input/mols/water/{cid}/.CHRG", f"input/pyscf/.{cid}.CHRG")
+            
+            # Copy UHF: input/mols/water/1/.UHF -> input/pyscf/.1.UHF
+            shutil.copy(f"input/mols/water/{cid}/.UHF", f"input/pyscf/.{cid}.UHF")
+
+
+rule pyscf_reactivity:
+    input:
+        xyz  = 'input/pyscf/{mol}.xyz',
+        chrg = 'input/pyscf/.{mol}.CHRG',
+        uhf = 'input/pyscf/.{mol}.UHF'
+    output:
+        xyz_opt = 'output/pyscf/{mol}_opt.xyz',
+        json    = 'output/pyscf/{mol}_reactivity.json',
+    log:
+        'output/pyscf/logs/{mol}.log'
+    threads: 8
+    script:
+        'scripts/pyscf_reactivity.py'
+
+
+rule pyscf_xyz_2_mol:
+    input:
+        "output/pyscf/{mol}_opt.xyz"
+
+    output:
+        "output/pyscf/{mol}_opt.mol"
+
+    shell:
+        """
+        obabel {input} -omol -O {output}
+        """
+
+
+rule prepare_water_pyscf_files:
+    output:
+        chrg = 'input/solvents/water/.CHRG',
+        uhf = 'input/solvents/water/.UHF'
+
+    shell:
+        """
+        mkdir -p input/solvents/water output/pyscf_water
+        echo 0 > {output.chrg}
+        echo 1 > {output.uhf}
+        """
+
+
+rule pyscf_reactivity_water:
+    input:
+        xyz  = 'input/solvents/water/xtbopt.xyz',
+        chrg = 'input/solvents/water/.CHRG',
+        uhf = 'input/solvents/water/.UHF'
+    output:
+        xyz_opt = 'output/pyscf_water/water_opt.xyz',
+        json    = 'output/pyscf_water/water_reactivity.json',
+    log:
+        'output/pyscf_water/water.log'
+    threads: 8
+    script:
+        'scripts/pyscf_reactivity.py'
+
+
+rule visualize_dft_results:
+    input:
+        jsons = expand('output/pyscf/{mol}_reactivity.json', mol=dft_cids),
+        mayr = "input/csv_all.csv",
+        mols = expand("output/pyscf/{mol}_opt.mol", mol=dft_cids),
+
+    output:
+        "imgs/ng_dft.pdf",
+        "imgs/nd_dft.pdf",
+        "imgs/pysr_dft.pdf",
+        "imgs/pysr_water_dft.pdf",
+        "imgs/pysr_scaffold_dft.pdf",
+        csv = "output/dft_indices.csv"
+    
+    script:
+        "scripts/analysis_dft.py"
+
+
